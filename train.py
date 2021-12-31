@@ -8,6 +8,8 @@ from util.visualizer import Visualizer
 from training.gan_trainer import GANTrainer
 from training.dataset import create_dataloader, yield_data
 
+from tqdm import tqdm
+
 
 def training_loop():
     torch.backends.cudnn.benchmark = True
@@ -46,12 +48,15 @@ def training_loop():
         total_iters = opt.resume_iter
 
     optimize_time = 0.1
-    for epoch in range(opt.max_epoch):
+    print("The training ends when either max_epochs or max_iters is reached.")
+    iterbar = tqdm(total=opt.max_iter, position=1, leave=False, desc="total_iters")
+    for epoch in tqdm(range(opt.max_epoch), position=0, desc="epoch"):
         iter_data_time = time.time()    # timer for data loading per iteration
         epoch_iter = 0                  # the number of training iterations in current epoch, reset to 0 every epoch
 
         for i, data_sketch in enumerate(dataloader_sketch):  # inner loop within one epoch
             if total_iters >= opt.max_iter:
+                iterbar.close()
                 return
 
             # makes dictionary to store all inputs
@@ -98,8 +103,10 @@ def training_loop():
                 visualizer.plot_current_errors(metrics, total_iters)
 
             total_iters += 1
+            iterbar.update(1)
             epoch_iter += 1
             iter_data_time = time.time()
+    iterbar.close()
 
 
 if __name__ == "__main__":
