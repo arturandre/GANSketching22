@@ -6,6 +6,28 @@ from torch import nn
 from torch.nn import functional as F
 
 from .op import FusedLeakyReLU, fused_leaky_relu, upfirdn2d
+import torch.autograd as autograd
+
+
+class GetSubnet(autograd.Function):
+    @staticmethod
+    def forward(ctx, scores, k):
+        # Get the supermask by sorting the scores and using the top k%
+        out = scores.clone()
+        _, idx = scores.flatten().sort()
+        j = int((1 - k) * scores.numel())
+
+        # flat_out and out access the same memory.
+        flat_out = out.flatten()
+        flat_out[idx[:j]] = 0
+        flat_out[idx[j:]] = 1
+
+        return out
+
+    @staticmethod
+    def backward(ctx, g):
+        # send the gradient g straight-through on the backward pass.
+        return g, None
 
 
 class PixelNorm(nn.Module):
@@ -125,14 +147,45 @@ class EqualConv2d(nn.Module):
             f" {self.weight.shape[2]}, stride={self.stride}, padding={self.padding})"
         )
 
-
 class EqualLinear(nn.Module):
     def __init__(
-        self, in_dim, out_dim, bias=True, bias_init=0, lr_mul=1, activation=None
+        self, in_dim, out_dim, bias=True, bias_init=0, lr_mul=1, activation=None,
+        use_supermask=False, sparsity=None, finetune_supermask=False
     ):
         super().__init__()
+        #self.supermasklist = supermasklist
+        #self.masked = False
+        #if (self.supermasklist is not None) and (len(self.supermasklist) > 0):
+        #    self.masked = True
 
         self.weight = nn.Parameter(torch.randn(out_dim, in_dim).div_(lr_mul))
+        
+        self.use_supermask = use_supermask
+        self.sparsity = sparsity
+
+        if use_supermask:
+            # REF: https://github.com/allenai/hidden-networks/blob/dddf2d093de568fc76d460a77fa2650e56e79c1a/simple_mnist_example.py#L65
+            self.scores = nn.Parameter(torch.Tensor(self.weight.size()))
+            nn.init.kaiming_uniform_(self.scores, a=math.sqrt(5))
+
+            # NOTE: initialize the weights like this.
+            nn.init.kaiming_normal_(self.weight, mode="fan_in", nonlinearity="relu")
+
+            # NOTE: turn the gradient on the weights off
+            if not finetune_supermask:
+                self.weight.requires_grad = False
+            else:
+                self.scores.requires_grad = False
+        
+        
+
+        # if n_tasks > 0:
+        #     self.supermasks = []
+        #     for _ in n_tasks:
+        #         supermask = nn.Parameter(torch.randn(out_dim, in_dim))
+        #         self.supermasks.append(supermask)
+        # else:
+        #     self.supermasks = None
 
         if bias:
             self.bias = nn.Parameter(torch.zeros(out_dim).fill_(bias_init))
@@ -144,24 +197,48 @@ class EqualLinear(nn.Module):
 
         self.scale = (1 / math.sqrt(in_dim)) * lr_mul
         self.lr_mul = lr_mul
+        
 
     def forward(self, input):
+        # if (self.supermasklist is not None) and (len(self.supermasklist) > 0):
+        #     # We also use the supermask at index 0
+        #     device = input.device
+        #     # https://pytorch.org/docs/stable/generated/torch.Tensor.to.html
+        #     self.supermasklist[0] = self.supermasklist[0].to(device)
+        #     masked_weight = self.weight.data * self.supermasklist[0]
+        #     self.masked = True
+        # else:
+        #     masked_weight = self.weight
+
+        # REF: https://github.com/allenai/hidden-networks/blob/dddf2d093de568fc76d460a77fa2650e56e79c1a/simple_mnist_example.py#L75
+        if self.use_supermask:
+            subnet = GetSubnet.apply(self.scores.abs(), self.sparsity)
+            masked_weight = self.weight * subnet
+        else:
+            masked_weight = self.weight
+        
         if self.activation:
-            out = F.linear(input, self.weight * self.scale)
+            out = F.linear(input, masked_weight * self.scale)
             out = fused_leaky_relu(out, self.bias * self.lr_mul)
 
         else:
             out = F.linear(
-                input, self.weight * self.scale, bias=self.bias * self.lr_mul
+                input, masked_weight * self.scale, bias=self.bias * self.lr_mul
             )
+        
+        
 
         return out
 
     def __repr__(self):
-        return (
-            f"{self.__class__.__name__}({self.weight.shape[1]}, {self.weight.shape[0]})"
-        )
-
+        if self.use_supermask:
+            return (
+                f"{self.__class__.__name__}({self.weight.shape[1]}, {self.weight.shape[0]})"
+            )
+        else:
+            return (
+                f"{self.__class__.__name__}({self.weight.shape[1]}, {self.weight.shape[0]}) supermasked"
+            )
 
 class ModulatedConv2d(nn.Module):
     def __init__(
@@ -368,8 +445,17 @@ class Generator(nn.Module):
         blur_kernel=[1, 3, 3, 1],
         lr_mlp=0.01,
         w_shift=False,
+        use_supermask=False,
+        sparsity=None,
+        finetune_supermask=False
     ):
         super().__init__()
+        # supermasks is a list of lists, each of the inner lists correspond
+        # to a set of possible masks that can be applied to a particular
+        # EqualLinear layer. Currently (Feb, 17, 2022) there will be a single
+        # mask per layer (per inner list) because we only have 1 task
+        # but later there will be more supermasks per layer (one for each task).
+        self.supermasks = []
 
         self.size = size
 
@@ -378,11 +464,18 @@ class Generator(nn.Module):
         layers = [PixelNorm()]
 
         for i in range(n_mlp):
+            #supermasklist = [nn.Parameter(torch.ones(style_dim, style_dim))]
             layers.append(
                 EqualLinear(
-                    style_dim, style_dim, lr_mul=lr_mlp, activation="fused_lrelu"
+                    style_dim, style_dim, lr_mul=lr_mlp, activation="fused_lrelu",
+                    #supermasklist=supermasklist
+                    #supermasklist=None
+                    use_supermask=use_supermask,
+                    sparsity=sparsity,
+                    finetune_supermask=finetune_supermask
                 )
             )
+            #self.supermasks.append(supermasklist)
 
         if w_shift:
             layers.append(WShift(style_dim))
@@ -480,9 +573,13 @@ class Generator(nn.Module):
         input_is_latent=False,
         noise=None,
         randomize_noise=True,
+        supermasks=None
     ):
         if not input_is_latent:
-            styles = [self.style(s) for s in styles]
+            if supermasks is not None: # Each style is a EqualLinear layer
+                styles = [self.style(s, supermask=sm) for s, sm in zip(styles, supermasks)]
+            else:
+                styles = [self.style(s) for s in styles]
 
         if noise is None:
             if randomize_noise:

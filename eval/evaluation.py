@@ -5,6 +5,11 @@ import torch
 import torch.multiprocessing as mp
 
 from run_metrics import get_vgg_features, make_eval_images
+from cleanfid import fid
+
+import tensorflow as tf
+
+tf.compat.v1.disable_eager_execution()
 
 
 class Evaluator():
@@ -14,11 +19,11 @@ class Evaluator():
         self.gan_model = gan_model
 
         # load vgg features
-        self.real_vgg = get_vgg_features(opt.eval_dir, 2500, opt.eval_batch)
+        #self.real_vgg = get_vgg_features(opt.eval_dir, 2500, opt.eval_batch)
 
         # load fid stats
-        with mp.Pool(1) as p:
-            self.fid_stat = p.apply(get_fid_stats, (opt.eval_dir, opt.eval_batch))
+        #with mp.Pool(1) as p:
+        #    self.fid_stat = p.apply(get_fid_stats, (opt.eval_dir, opt.eval_batch))
 
         # record the best fid so far
         self.best_fid = float('inf')
@@ -41,7 +46,9 @@ class Evaluator():
 
         torch.cuda.empty_cache()
         with mp.Pool(1) as p:
-            metrics = p.apply(metrics_process, (cache_folder, self.fid_stat, self.real_vgg,))
+            #metrics = p.apply(metrics_process, (cache_folder, self.fid_stat, self.real_vgg,))
+            metrics = {}
+            metrics["fid"] = fid.compute_fid(self.opt.eval_dir, cache_folder, mode="clean")
 
         best_so_far = False
         if metrics['fid'] < self.best_fid:

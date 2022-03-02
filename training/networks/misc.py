@@ -4,7 +4,8 @@ from . import stylegan2
 def define_G(opt):
     w_shift = opt.optim_param_g == 'w_shift'
     generator = stylegan2.Generator(
-        opt.size, opt.z_dim, opt.n_mlp, lr_mlp=opt.lr_mlp, channel_multiplier=opt.channel_multiplier, w_shift=w_shift)
+        opt.size, opt.z_dim, opt.n_mlp, lr_mlp=opt.lr_mlp, channel_multiplier=opt.channel_multiplier, w_shift=w_shift,
+        use_supermask=opt.use_supermask, sparsity=opt.sparsity, finetune_supermask=opt.finetune_supermask)
     return generator
 
 

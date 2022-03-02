@@ -5,6 +5,7 @@ import torchvision.utils
 
 from .gan_model import GANModel
 
+from torch.utils.tensorboard import SummaryWriter
 
 class GANTrainer():
     """
@@ -15,6 +16,9 @@ class GANTrainer():
     def __init__(self, opt):
         self.opt = opt
         self.device = 'cuda' if not self.opt.use_cpu else 'cpu'
+        
+        log_path = os.path.join(self.opt.checkpoints_dir, self.opt.name, 'runs')
+        self.writer = SummaryWriter(log_dir=log_path)
 
         self.gan_model = GANModel(opt).to(self.device)
 
@@ -35,50 +39,54 @@ class GANTrainer():
             self.reports = {}
             self.set_fixed_noise(self.device)
 
-    def run_generator_one_step(self, data):
+    def run_generator_one_step(self, data, n_iter=None):
         g_losses, generated = self.gan_model(data, mode='generator')
         g_loss = sum(g_losses.values()).mean()
         self.optimizer_G.zero_grad()
         g_loss.backward()
         self.optimizer_G.step()
         self.generated = generated
+        self.writer.add_scalar('Loss/g_loss', g_loss, global_step=n_iter)
         update_dict(self.g_losses, g_losses)
 
-    def run_generator_regularization_one_step(self, data):
+    def run_generator_regularization_one_step(self, data, n_iter=None):
         output = self.gan_model(data, mode='generator-regularize')
         g_reg_losses, trackables = output
         g_reg_loss = sum(g_reg_losses.values()).mean()
         self.optimizer_G.zero_grad()
         g_reg_loss.backward()
         self.optimizer_G.step()
+        self.writer.add_scalar('Loss/g_reg_loss', g_reg_loss, global_step=n_iter)
         update_dict(self.g_losses, g_reg_losses)
         update_dict(self.trackables, trackables)
 
-    def run_discriminator_one_step(self, data):
+    def run_discriminator_one_step(self, data, n_iter=None):
         d_losses, interm_imgs = self.gan_model(data, mode='discriminator')
         d_loss = sum(d_losses.values()).mean()
         self.optimizer_D.zero_grad()
         d_loss.backward()
         self.optimizer_D.step()
+        self.writer.add_scalar('Loss/d_loss', d_loss, global_step=n_iter)
         update_dict(self.d_losses, d_losses)
         update_dict(self.interm_imgs, interm_imgs)
 
-    def run_discriminator_regularization_one_step(self, data):
+    def run_discriminator_regularization_one_step(self, data, n_iter=None):
         d_reg_losses = self.gan_model(data, mode='discriminator-regularize')
         d_reg_loss = sum(d_reg_losses.values()).mean()
         self.optimizer_D.zero_grad()
         d_reg_loss.backward()
         self.optimizer_D.step()
+        self.writer.add_scalar('Loss/d_reg_loss', d_reg_loss, global_step=n_iter)
         update_dict(self.d_losses, d_reg_losses)
 
     def train_one_step(self, data, iters):
         self.gan_model.set_requires_grad(False, True)
-        self.run_discriminator_one_step(data)
+        self.run_discriminator_one_step(data, n_iter=iters)
         if not self.opt.no_d_regularize and iters % self.opt.d_reg_every == 0:
-            self.run_discriminator_regularization_one_step(data)
+            self.run_discriminator_regularization_one_step(data, n_iter=iters)
 
         self.gan_model.set_requires_grad(True, False)
-        self.run_generator_one_step(data)
+        self.run_generator_one_step(data, n_iter=iters)
 
     def get_latest_losses(self):
         self.reports = {**self.g_losses, **self.d_losses, **self.trackables}

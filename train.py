@@ -2,6 +2,7 @@ import time
 import torch
 import torch.multiprocessing as mp
 
+
 from options import get_opt, print_options
 from eval import Evaluator
 from util.visualizer import Visualizer
@@ -9,6 +10,7 @@ from training.gan_trainer import GANTrainer
 from training.dataset import create_dataloader, yield_data
 
 from tqdm import tqdm
+
 
 
 def training_loop():
@@ -28,6 +30,7 @@ def training_loop():
                                                           opt.sketch_channel)
     # dataloader for image regularization
     if opt.dataroot_image is not None:
+        print(opt.dataroot_image)
         dataloader_image, sampler_image = create_dataloader(opt.dataroot_image,
                                                             opt.size,
                                                             opt.batch)
@@ -49,7 +52,7 @@ def training_loop():
 
     optimize_time = 0.1
     print("The training ends when either max_epochs or max_iters is reached.")
-    iterbar = tqdm(total=opt.max_iter, position=1, leave=False, desc="total_iters")
+    iterbar = tqdm(total=opt.max_iter, position=total_iters, leave=False, desc="total_iters")
     for epoch in tqdm(range(opt.max_epoch), position=0, desc="epoch"):
         iter_data_time = time.time()    # timer for data loading per iteration
         epoch_iter = 0                  # the number of training iterations in current epoch, reset to 0 every epoch

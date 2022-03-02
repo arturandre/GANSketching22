@@ -7,6 +7,8 @@ import torch
 from torchvision import utils
 from training.networks.stylegan2 import Generator
 
+from tqdm import tqdm
+
 
 def save_image_pytorch(img, name):
     """Helper function to save torch tensor into an image file."""
@@ -47,7 +49,7 @@ def generate(args, netG, device, mean_latent):
             return
 
         # Generate image by sampling input noises
-        for start in range(0, args.samples, args.batch_size):
+        for start in tqdm(range(0, args.samples, args.batch_size)):
             end = min(start + args.batch_size, args.samples)
             batch_sz = end - start
             sample_z = torch.randn(batch_sz, 512, device=device) + w_shift

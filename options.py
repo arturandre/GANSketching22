@@ -59,6 +59,10 @@ def get_opt():
     parser.add_argument("--photosketch_path", type=str, default='./pretrained/photosketch.pth', help="path to the photosketch pre-trained model")
     parser.add_argument("--diffaug_policy", type=str, default='', help='sequence of operations used for differentiable augmentation')
 
+    parser.add_argument("--use_supermask", action="store_true", help="use this flag to enable the usage of supermasks for the mapping network of the stylegan2")
+    parser.add_argument('--sparsity', type=float, default=0.5, help='how sparse is each layer')
+    parser.add_argument('--finetune_supermask', action="store_true", help="use this flag to freeze the supermask and train the only the network weights")
+
     opt = parser.parse_args()
     return opt, parser
 

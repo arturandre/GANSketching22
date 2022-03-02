@@ -1,3 +1,8 @@
+cache_files/
+*.out
+fid-stats/
+weights.zip
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
