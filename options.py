@@ -7,7 +7,6 @@ def get_opt():
     parser = argparse.ArgumentParser()
 
     parser.add_argument("--name", type=str)
-    parser.add_argument("--dataroot_sketch", type=str, required=True, help="root to the sketch dataset")
     parser.add_argument("--dataroot_image", type=str, default=None, help="root to the image dataset for image regularization")
     parser.add_argument("--eval_dir", type=str, default=None, help="directory to the evaluation set")
     parser.add_argument("--sketch_channel", type=int, default=1, help="number of channels of sketch inputs, default is monochrome (1)")
@@ -53,6 +52,7 @@ def get_opt():
     parser.add_argument("--no_d_regularize", action="store_true", help="use this flag to disable R1 regularization")
     parser.add_argument("--d_reg_every", type=int, default=16, help="frequency to apply R1 regularization")
     parser.add_argument("--r1", type=float, default=10, help="strength of R1 regularzation")
+    parser.add_argument("--fix_discriminator", action="store_true", help="use this flag to fix the discriminator weights during training.")
 
     parser.add_argument("--transform_real", type=str, default='to3ch', help="sequence of operations to transform the real sketches before D")
     parser.add_argument("--transform_fake", type=str, default='toSketch,to3ch', help="sequence of operations to transform the fake images before D")
@@ -60,8 +60,17 @@ def get_opt():
     parser.add_argument("--diffaug_policy", type=str, default='', help='sequence of operations used for differentiable augmentation')
 
     parser.add_argument("--use_supermask", action="store_true", help="use this flag to enable the usage of supermasks for the mapping network of the stylegan2")
-    parser.add_argument('--sparsity', type=float, default=0.5, help='how sparse is each layer')
+    parser.add_argument("--use_smallest_supermask", action="store_true", help="use this flag to enable the usage of masks to prune the smallest weights of the mapping network of the stylegan2")
+    parser.add_argument("--use_random_supermask", action="store_true", help="use this flag to enable the usage of random masks to prune the weights of the mapping network of the stylegan2")
+    parser.add_argument('--sparsity', type=float, default=0.5, help='how sparse is each layer when using a supermask')
     parser.add_argument('--finetune_supermask', action="store_true", help="use this flag to freeze the supermask and train the only the network weights")
+
+    parser.add_argument('--use_hypernet', action="store_true", help="use this flag to train a hypernetwork instead of fine-tuning the generator")
+    parser.add_argument('--use_feature_matching', action="store_true", help="use this flag to enable the usage of the feature matching loss")
+    parser.add_argument('--hypernet_params', type=int, default=512, help='Number of parameters of each style layer of the mapping network to be predicted by the hypernet (-1 for all)')
+
+    parser.add_argument("--dataroot_sketch", type=str, required=True, help="root to the sketch dataset")
+    parser.add_argument("--dataroot_sketch_augs", type=str, required=False, help="root to the augmented sketches dataset, if supplied will shadow the --dataroot_sketch option")
 
     opt = parser.parse_args()
     return opt, parser

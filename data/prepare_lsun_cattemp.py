@@ -5,14 +5,13 @@ from PIL import Image
 from tqdm import tqdm
 
 
-#def create_lsun(save_dir, lmdb_dir, old_save_dir, resolution=256, max_images=None):
-def create_lsun(save_dir, lmdb_dir, resolution=256, max_images=None):
+def create_lsun(save_dir, lmdb_dir, old_save_dir, resolution=256, max_images=None):
     print('Loading LSUN dataset from "%s"' % lmdb_dir)
     import lmdb # pip install lmdb # pylint: disable=import-error
     import cv2 # pip install opencv-python
     import io
     #init_idx = len(os.listdir(old_save_dir)) # Files 
-    init_idx = 0 # Files
+    init_idx = 820008 # Files
     with lmdb.open(lmdb_dir, readonly=True).begin(write=False) as txn:
             total_images = txn.stat()['entries']
             print("Total images: ", total_images)

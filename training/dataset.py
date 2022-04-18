@@ -1,18 +1,30 @@
 import random
-import pathlib
+#import pathlib
+import os
 from PIL import Image
 from torch.utils import data
 from torch.utils.data import Dataset
 from torchvision import transforms
+from tqdm import tqdm
 
 
 IMAGE_EXTENSIONS = {'bmp', 'jpg', 'jpeg', 'pgm', 'png', 'ppm',
                     'tif', 'tiff', 'webp'}
 class ImagePathDataset(Dataset):
     def __init__(self, path, image_mode='L', transform=None, max_images=None):
-        path = pathlib.Path(path)
-        files = sorted([file for ext in IMAGE_EXTENSIONS
-                       for file in path.glob('*.{}'.format(ext))])
+        #path = pathlib.Path(path)
+        #path = os.walk(path)
+
+        files = []
+        for root, dirs, fs in tqdm(os.walk(path)):
+            for f in fs:
+                for ext in IMAGE_EXTENSIONS:
+                    if f.endswith(f".{ext}"):
+                        files.append(os.path.join(root, f))
+        # files = sorted([file for ext in IMAGE_EXTENSIONS
+        #                for file in path.glob('*.{}'.format(ext))])
+        files = sorted(files)
+        print(f"There are {len(files)} image paths loaded.")
         if max_images is None:
             self.files = files
         elif max_images < len(files):

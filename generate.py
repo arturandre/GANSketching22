@@ -1,12 +1,20 @@
+print("os")
 import os
+print("argparse")
 import argparse
 
+print("random")
 import random
+print("numpy")
 import numpy as np
+print("torch")
 import torch
+print("torchvision")
 from torchvision import utils
+print("training.networks.stylegan2")
 from training.networks.stylegan2 import Generator
 
+print("tqdm")
 from tqdm import tqdm
 
 
@@ -75,6 +83,12 @@ if __name__ == '__main__':
     parser.add_argument('--truncation_mean', type=int, default=4096, help="number of samples to calculate the mean latent for truncation")
     parser.add_argument('--seed', type=int, default=None, help="if specified, use a fixed random seed")
     parser.add_argument('--device', type=str, default='cuda')
+    
+    parser.add_argument("--use_supermask", action="store_true", help="use this flag to enable the usage of supermasks for the mapping network of the stylegan2")
+    parser.add_argument("--use_smallest_supermask", action="store_true", help="use this flag to enable the usage of masks to prune the smallest weights of the mapping network of the stylegan2")
+    parser.add_argument("--use_random_supermask", action="store_true", help="use this flag to enable the usage of random masks to prune the weights of the mapping network of the stylegan2")
+    parser.add_argument('--sparsity', type=float, default=0.5, help='how sparse is each layer when using a supermask')
+
 
     args = parser.parse_args()
 
@@ -88,7 +102,11 @@ if __name__ == '__main__':
     if not os.path.exists(args.save_dir):
         os.makedirs(args.save_dir)
 
-    netG = Generator(args.size, 512, 8).to(device)
+    netG = Generator(args.size, 512, 8,
+        use_supermask=args.use_supermask,
+        sparsity=args.sparsity,
+        use_smallest_supermask=args.use_smallest_supermask,
+        use_random_supermask=args.use_random_supermask,).to(device)
     checkpoint = torch.load(args.ckpt, map_location='cpu')
 
     netG.load_state_dict(checkpoint)

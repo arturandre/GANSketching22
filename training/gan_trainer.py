@@ -24,21 +24,37 @@ class GANTrainer():
 
         self.generated = None
         if opt.isTrain:
-            self.optimizer_G, self.optimizer_D = \
-                self.gan_model.create_optimizers(opt)
+            if opt.use_hypernet:
+                self.optimizer_H, self.optimizer_D = \
+                    self.gan_model.create_optimizers(opt)
+            else:
+                self.optimizer_G, self.optimizer_D = \
+                    self.gan_model.create_optimizers(opt)
             self.gan_model.create_loss_fns(opt)
-            self.gan_model.set_requires_grad(False, False)
+            self.gan_model.set_requires_grad(False, False, False)
 
             if opt.resume_iter is not None:
                 self.load(opt.resume_iter)
 
             self.g_losses = {}
             self.d_losses = {}
+            self.h_losses = {}
             self.trackables = {}
             self.interm_imgs = {}
             self.reports = {}
             self.set_fixed_noise(self.device)
 
+    def run_hypernet_one_step(self, data, n_iter=None):
+        h_losses, generated = self.gan_model(data, mode='hypernet')
+        h_loss = sum(h_losses.values()).mean()
+        self.optimizer_H.zero_grad()
+        #torch.autograd.set_detect_anomaly(True)
+        h_loss.backward()
+        self.optimizer_H.step()
+        self.generated = generated
+        self.writer.add_scalar('Loss/g_loss', h_loss, global_step=n_iter)
+        update_dict(self.h_losses, h_losses)
+    
     def run_generator_one_step(self, data, n_iter=None):
         g_losses, generated = self.gan_model(data, mode='generator')
         g_loss = sum(g_losses.values()).mean()
@@ -80,13 +96,18 @@ class GANTrainer():
         update_dict(self.d_losses, d_reg_losses)
 
     def train_one_step(self, data, iters):
-        self.gan_model.set_requires_grad(False, True)
-        self.run_discriminator_one_step(data, n_iter=iters)
-        if not self.opt.no_d_regularize and iters % self.opt.d_reg_every == 0:
-            self.run_discriminator_regularization_one_step(data, n_iter=iters)
+        if not self.opt.fix_discriminator:
+            self.gan_model.set_requires_grad(False, True, False)
+            self.run_discriminator_one_step(data, n_iter=iters)
+            if not self.opt.no_d_regularize and iters % self.opt.d_reg_every == 0:
+                self.run_discriminator_regularization_one_step(data, n_iter=iters)
 
-        self.gan_model.set_requires_grad(True, False)
-        self.run_generator_one_step(data, n_iter=iters)
+        if self.opt.use_hypernet:
+            self.gan_model.set_requires_grad(False, False, True)
+            self.run_hypernet_one_step(data, n_iter=iters)
+        else:
+            self.gan_model.set_requires_grad(True, False)
+            self.run_generator_one_step(data, n_iter=iters)
 
     def get_latest_losses(self):
         self.reports = {**self.g_losses, **self.d_losses, **self.trackables}
@@ -117,11 +138,18 @@ class GANTrainer():
     def save(self, iters):
         self.gan_model.save(iters)
 
-        misc = {
-            "g_optim": self.optimizer_G.state_dict(),
-            "d_optim": self.optimizer_D.state_dict(),
-            "opt": self.opt,
-        }
+        if self.opt.use_hypernet:
+            misc = {
+                "h_optim": self.optimizer_H.state_dict(),
+                "d_optim": self.optimizer_D.state_dict(),
+                "opt": self.opt,
+            }
+        else:
+            misc = {
+                "g_optim": self.optimizer_G.state_dict(),
+                "d_optim": self.optimizer_D.state_dict(),
+                "opt": self.opt,
+            }
         save_path = os.path.join(self.opt.checkpoints_dir, self.opt.name, f"{iters}_net_")
         torch.save(misc, save_path + "misc.pth")
 
@@ -130,7 +158,10 @@ class GANTrainer():
         self.gan_model.load(iters)
         load_path = os.path.join(self.opt.checkpoints_dir, self.opt.name, f"{iters}_net_")
         state_dict = torch.load(load_path + "misc.pth", map_location=self.device)
-        self.optimizer_G.load_state_dict(state_dict["g_optim"])
+        if self.opt.use_hypernet:
+            self.optimizer_H.load_state_dict(state_dict["h_optim"])
+        else:
+            self.optimizer_G.load_state_dict(state_dict["g_optim"])
         self.optimizer_D.load_state_dict(state_dict["d_optim"])
 
     def set_fixed_noise(self, device):

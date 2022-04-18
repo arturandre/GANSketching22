@@ -1,6 +1,6 @@
 #!/bin/bash
 python train.py \
---name horse_riders_original_sup30-10000-s10 \
+--name horse_riders_original_sup30-10000-s90 \
 --dataroot_sketch /scratch/arturao/GANSketching_old/data/sketch/photosketch/horse_riders \
 --dataroot_image /scratch/arturao/GANSketching_old/data/image/horse --l_image 0.7 \
 --disable_eval \
@@ -11,4 +11,4 @@ python train.py \
 --no_wandb \
 --max_iter 10001 \
 --use_supermask \
---sparsity 0.1 \
+--sparsity 0.9 \

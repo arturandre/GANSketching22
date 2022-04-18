@@ -5,11 +5,6 @@ import torch
 import torch.multiprocessing as mp
 
 from run_metrics import get_vgg_features, make_eval_images
-from cleanfid import fid
-
-import tensorflow as tf
-
-tf.compat.v1.disable_eager_execution()
 
 
 class Evaluator():
@@ -48,7 +43,10 @@ class Evaluator():
         with mp.Pool(1) as p:
             #metrics = p.apply(metrics_process, (cache_folder, self.fid_stat, self.real_vgg,))
             metrics = {}
-            metrics["fid"] = fid.compute_fid(self.opt.eval_dir, cache_folder, mode="clean")
+            #metrics["fid"] = fid.compute_fid(self.opt.eval_dir, cache_folder, mode="clean")
+            real_folder = self.opt.eval_dir
+            fake_folder = cache_folder
+            metrics["fid"] = fid.compute_fid(os.path.join(real_folder,'image'), os.path.join(fake_folder,'image'), num_workers=0)
 
         best_so_far = False
         if metrics['fid'] < self.best_fid:
@@ -69,17 +67,17 @@ def metrics_process(cache_folder, fid_stats, vgg_feats):
     metrics['fid'] = fid.compute_fid(cache_folder+'/image/', num_workers=0, dataset_name=fid_stats, dataset_split="custom")
     torch.cuda.empty_cache()
 
-    print("Evaluating P&R...")
-    from eval.precision_recall import metrics as pr
-    pr.init_tf()
-    # Initialize VGG-16.
-    feature_net = pr.initialize_feature_extractor()
+    # print("Evaluating P&R...")
+    # from eval.precision_recall import metrics as pr
+    # pr.init_tf()
+    # # Initialize VGG-16.
+    # feature_net = pr.initialize_feature_extractor()
 
-    # Calculate VGG-16 features.
-    fake_feats = pr.get_features(f'{cache_folder}/image/', feature_net, 2500, 10, num_gpus=1)
-    state = pr.knn_precision_recall_features(vgg_feats, fake_feats)
-    metrics['precision'] = state['precision'][0]
-    metrics['recall'] = state['recall'][0]
+    # # Calculate VGG-16 features.
+    # fake_feats = pr.get_features(f'{cache_folder}/image/', feature_net, 2500, 10, num_gpus=1)
+    # state = pr.knn_precision_recall_features(vgg_feats, fake_feats)
+    # metrics['precision'] = state['precision'][0]
+    # metrics['recall'] = state['recall'][0]
 
     return metrics
 

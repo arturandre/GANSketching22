@@ -1,8 +1,12 @@
 import os
 import random
+import numpy as np
 import torch
+from tqdm import tqdm
 
 from training import networks
+from hyper_net import HyperNet
+from copy import deepcopy
 
 
 class GANModel(torch.nn.Module):
@@ -27,6 +31,11 @@ class GANModel(torch.nn.Module):
         self.tf_real = networks.OutputTransform(opt, process=opt.transform_real, diffaug_policy=opt.diffaug_policy)
         self.tf_fake = networks.OutputTransform(opt, process=opt.transform_fake, diffaug_policy=opt.diffaug_policy)
 
+        if self.opt.use_hypernet:
+            self.netG.eval()
+            self.hyper_net, self.mapping_indices_list = self.initialize_hypernetwork()
+            self.hyper_net.heads.train()
+
     # Entry point for all calls involving forward pass of deep networks.
     def forward(self, data, mode):
         real_sketch, real_image = self.preprocess_input(data)
@@ -34,6 +43,9 @@ class GANModel(torch.nn.Module):
         if mode == 'generator':
             g_loss, generated = self.compute_generator_loss()
             return g_loss, generated
+        elif mode == 'hypernet':
+            h_loss, generated = self.compute_hypernet_loss(real_sketch, real_image)
+            return h_loss, generated
         elif mode == 'discriminator':
             d_loss, interm_imgs = self.compute_discriminator_loss(real_sketch, real_image)
             return d_loss, interm_imgs
@@ -70,8 +82,18 @@ class GANModel(torch.nn.Module):
         # create optimizers based on the selected parameters
         optimizer_G = torch.optim.Adam(G_params, lr=G_lr, betas=(G_beta1, G_beta2))
         optimizer_D = torch.optim.Adam(D_params, lr=D_lr, betas=(D_beta1, D_beta2))
-
-        return optimizer_G, optimizer_D
+        
+        if self.opt.use_hypernet:
+            self.H_params = self.hyper_net.parameters()
+            optimizer_H = torch.optim.Adam(
+                filter(lambda p: p.requires_grad, self.H_params),
+                lr=0.0002,
+                betas=(0.0, 0.9),
+                weight_decay=0.0 # Default from /scratch/arturao/3FGAN/config/defaults.py
+            )
+            return optimizer_H, optimizer_D
+        else:
+            return optimizer_G, optimizer_D
 
     def create_loss_fns(self, opt):
         self.criterionGAN = networks.GANLoss(opt.gan_mode, tensor=self.FloatTensor, opt=self.opt)
@@ -80,11 +102,13 @@ class GANModel(torch.nn.Module):
         if not opt.no_d_regularize:
             self.d_regularize = networks.RegularizeD()
 
-    def set_requires_grad(self, g_requires_grad=None, d_requires_grad=None):
-        if g_requires_grad is not None:
+    def set_requires_grad(self, g_requires_grad=None, d_requires_grad=None, h_requires_grad=None):
+        if (g_requires_grad is not None) and g_requires_grad:
             networks.set_requires_grad(self.G_params, g_requires_grad)
-        if d_requires_grad is not None:
+        if (d_requires_grad is not None) and d_requires_grad:
             networks.set_requires_grad(self.D_params, d_requires_grad)
+        if (h_requires_grad is not None) and h_requires_grad:
+            networks.set_requires_grad(self.H_params, h_requires_grad)
 
     @torch.no_grad()
     def inference(self, noise, trunc_psi=1.0, mean_latent=None, with_tf=False):
@@ -117,6 +141,8 @@ class GANModel(torch.nn.Module):
     def save(self, iters):
         save_path = os.path.join(self.opt.checkpoints_dir, self.opt.name, f"{iters}_net_")
         torch.save(self.netG.state_dict(), save_path + "G.pth")
+        if self.opt.use_hypernet:
+            torch.save(self.hyper_net.state_dict(), save_path + "H.pth")
         torch.save(self.netD_sketch.state_dict(), save_path + "D_sketch.pth")
         if self.opt.l_image > 0:
             torch.save(self.netD_image.state_dict(), save_path + "D_image.pth")
@@ -135,6 +161,25 @@ class GANModel(torch.nn.Module):
     ############################################################################
     # Private helper methods
     ############################################################################
+
+    def initialize_hypernetwork(self):
+        style_widths = get_param_by_name(self.netG, 'style')[1]
+        # Indices from the mapping layers of the generator to be predicted
+        mapping_indices_list = []
+        for style in tqdm(style_widths, desc="loading styles' indices"):
+            n = self.opt.hypernet_params
+            _, idx = style.abs().flatten().sort()
+            idx = idx.detach().cpu().numpy()
+            mapping_indices_list.append(idx[:n])
+
+        hyper_net = HyperNet(
+            num_support_shot=self.opt.batch,
+            # NEED TO INCLUDE THE netD_sketch TOO!
+            backbone=deepcopy(self.netD_image),
+            output_style_widths=[len(l) for l in mapping_indices_list],
+            freeze_backbone=False
+            )
+        return hyper_net, mapping_indices_list
 
     def initialize_networks(self, opt):
         netG = networks.define_G(opt)
@@ -181,8 +226,91 @@ class GANModel(torch.nn.Module):
                 data['image'] = data['image'].cuda()
         return data['sketch'], data['image']
 
-    def compute_generator_loss(self):
+    def compute_feature_matching_loss(self, gen_images):
+        # At this point the generator has being modified (at compute_hypernet_loss)
+        # It will be restored to the baseline generator once compute_hypernet_loss
+        # finishes.
+        #
+        # gen_images are the x^bar
+        # This is x^hat
+        fake_image = self.generate_fake()
+        fake_transf = self.tf_fake(fake_image)
+        
+        pred_real = self.hyper_net(gen_images)
+        aux = []
+        for i in range(len(pred_real)):
+            aux.append(pred_real[i][0].detach().cpu()) # ignoring bias terms
+        pred_real = aux
+
+        pred_fake = self.hyper_net(fake_image)
+        aux = []
+        for i in range(len(pred_fake)):
+            aux.append(pred_fake[i][0].detach().cpu()) # ignoring bias terms
+        pred_fake = aux
+        sum_loss = 0
+        for i in range(len(pred_fake)):
+            sum_loss += torch.abs(pred_real[i]-pred_fake[i]).sum()
+
+        fake_image.detach()
+
+        loss = sum_loss.cpu()
+        return loss
+
+    def replace_generator_mapping_weights(self, generated_weights):
+        style_widths = get_param_by_name(self.netG, 'style')[1]
+        self.backed_style_widths = [None]*len(style_widths)
+        self.netG.eval()
+        #from torch.autograd import Variable as V
+        with torch.no_grad():
+            for i, layer_indices in enumerate(tqdm(self.mapping_indices_list)):
+                # x = style_widths[i].detach().cpu().numpy()
+                #self.backed_style_widths[i] = style_widths[i].cpu().clone().detach()
+                x = style_widths[i]
+                x.flatten()[layer_indices] = generated_weights[i][0].flatten()
+                #pred_for_support[SAMPLE(1-30)][LAYER(1-16)][Weight/Bias(0-1)][PARAMETERS_INDICES]
+                # x.flatten()[layer_indices] = generated_weights[i][0].detach().cpu().numpy().flatten()
+                # style_widths[i] = torch.nn.Parameter(torch.from_numpy(x))
+                print(i)
+        
+    
+    def restore_generator_pretrained_weights(self):
+        if self.opt.g_pretrained != '':
+            weights = torch.load(self.opt.g_pretrained, map_location=lambda storage, loc: storage)
+            self.netG.load_state_dict(weights, strict=False)
+        
+    def compute_hypernet_loss(self, real_sketch, real_image):
+        H_losses = {}
+        generated_weights = self.hyper_net(real_image)
+
+        try:
+            if self.fake_image_base_gen is None:
+                self.fake_image_base_gen = [self.generate_fake() for _ in range(1)]
+        except Exception:
+                self.fake_image_base_gen = [self.generate_fake() for _ in range(1)]
+
+        fake_sample_size = len(self.fake_image_base_gen)
+        fake_sample_index = np.random.randint(fake_sample_size)
+        print(f"fake_sample_size: {fake_sample_size}")
+        print(f"fake_sample_index: {fake_sample_index}")
+        fake_image_base_gen_sample = self.fake_image_base_gen[fake_sample_index]
+
+        self.replace_generator_mapping_weights(generated_weights)
+
+        g_loss, generated = self.compute_generator_loss()#(generated_weights)
+        H_losses.update(g_loss)
+        if self.opt.use_feature_matching:
+            fm_loss = self.compute_feature_matching_loss(fake_image_base_gen_sample)#(generated_weights)
+            H_losses['fm_loss'] = fm_loss
+
+        #self.restore_generator_pretrained_weights()
+        return H_losses, generated.detach()
+
+    def compute_generator_loss(self, generated_weights=None):
         G_losses = {}
+
+        if self.opt.use_hypernet and generated_weights is not None:
+            self.replace_generator_mapping_weights(generated_weights)
+
         fake_image = self.generate_fake()
 
         # applying weight regularization

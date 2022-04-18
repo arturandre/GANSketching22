@@ -40,13 +40,16 @@ def logfile_pngs(logfile, outfolder):
         plt.savefig(os.path.join(outfolder, f'{c}.png'))
         plt.clf()
 
-def computeFID(fp):
-    rp = f"/scratch/arturao/GANSketching_old/data/eval/horse_riders/image"
+def computeFID(rp_exp, fp_exp):
+    #rp = f"/scratch/arturao/GANSketching_old/data/eval/gabled_church/image"
+    rp = f"/scratch/arturao/GANSketching_old/data/eval/{rp_exp}/image"
+    #rp = f"/scratch/arturao/GANSketching_old/data/eval/horse_riders/image"
     #fp = f"/scratch/arturao/GANSketching22/output/horse_riders_original30-800-7500/"
+    fp = f"/scratch/arturao/GANSketching22/output/{fp_exp}/"
     score = fid.compute_fid(rp,fp, mode="clean")
     print(f"FID score: {score}")
 
 if __name__ == "__main__":
-    #computeFID(sys.argv[1])
-    logfile_pngs(sys.argv[1], sys.argv[2])
+    computeFID(sys.argv[1], sys.argv[2])
+    #logfile_pngs(sys.argv[1], sys.argv[2])
      

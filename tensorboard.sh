@@ -1,0 +1,1 @@
+python /home/arturao/.local/bin/tensorboard --logdir=$1

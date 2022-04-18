@@ -47,30 +47,32 @@ def make_eval_images(g, save_folder, eval_samples, batch_size, device, to_cpu=Tr
         g.to('cpu')
 
 
-def get_metrics(opt, name, target):
-    real_folder = f"{opt.eval_root}/{target}/"
-    fake_folder = f"{opt.sample_root}/{name}/"
+def get_metrics(opt, name, target, path, metric_name):
+    real_folder = os.path.join(opt.eval_root,target)
+    fake_folder = os.path.join(opt.sample_root,metric_name)
 
-    ckpt_path = f"{opt.model_root}/{name}.pth"
+    #ckpt_path = f"{opt.model_root}/{name}.pth"
+    ckpt_path = os.path.join(path, name)
     g = setup_generator(ckpt_path)
     stats_fake = get_stats(opt, g, fake_folder)
     stats_real = get_stats(opt, None, real_folder)
 
-    fid_value = fid.compute_fid(real_folder+'image', fake_folder+'image', num_workers=0)
+    fid_value = fid.compute_fid(os.path.join(real_folder,'image'),
+        os.path.join(fake_folder,'image'), num_workers=0)
 
     ppl_wend = compute_ppl(g, num_samples=50000, epsilon=1e-4, space='w', sampling='end', crop=False, batch_size=25, device='cuda')
     del g
     torch.cuda.empty_cache()
 
     fake_feats, real_feats = stats_fake['vgg_features'], stats_real['vgg_features']
-    with mp.Pool(1) as p:
-        precision, recall = p.apply(run_precision_recall, (real_feats, fake_feats))
+    # with mp.Pool(1) as p:
+    #     precision, recall = p.apply(run_precision_recall, (real_feats, fake_feats))
 
     return {
         "fid": fid_value,
         "ppl": ppl_wend,
-        "precision": precision,
-        "recall": recall
+        # "precision": precision,
+        # "recall": recall
     }
 
 
@@ -97,30 +99,30 @@ def get_vgg_features(folder, eval_samples, batch_size):
         f.close()
         return features
 
-    with mp.Pool(1) as p:
-        return p.apply(run_vgg, (folder, eval_samples, batch_size,))
+    # with mp.Pool(1) as p:
+    #     return p.apply(run_vgg, (folder, eval_samples, batch_size,))
 
 
-def run_vgg(folder, eval_samples, batch_size):
-    from eval.precision_recall import metrics as pr
-    pr.init_tf()
-    # Initialize VGG-16.
-    feature_net = pr.initialize_feature_extractor()
+# def run_vgg(folder, eval_samples, batch_size):
+#     from eval.precision_recall import metrics as pr
+#     pr.init_tf()
+#     # Initialize VGG-16.
+#     feature_net = pr.initialize_feature_extractor()
 
-    # Calculate VGG-16 features.
-    features = pr.get_features(f'{folder}/image/', feature_net, eval_samples, batch_size, num_gpus=1)
-    np.savez_compressed(f"{folder}/vgg_features.npz", feat=features)
+#     # Calculate VGG-16 features.
+#     features = pr.get_features(f'{folder}/image/', feature_net, eval_samples, batch_size, num_gpus=1)
+#     np.savez_compressed(f"{folder}/vgg_features.npz", feat=features)
 
-    return features
+#     return features
 
 
-def run_precision_recall(real_feats, fake_feats):
-    from eval.precision_recall import metrics as pr
-    pr.init_tf()
-    state = pr.knn_precision_recall_features(real_feats, fake_feats)
-    precision = state['precision'][0]
-    recall = state['recall'][0]
-    return precision, recall
+# def run_precision_recall(real_feats, fake_feats):
+#     from eval.precision_recall import metrics as pr
+#     pr.init_tf()
+#     state = pr.knn_precision_recall_features(real_feats, fake_feats)
+#     precision = state['precision'][0]
+#     recall = state['recall'][0]
+#     return precision, recall
 
 
 def setup_generator(ckpt_path, w_shift=False):
@@ -145,16 +147,32 @@ if __name__ == '__main__':
 
     with open(opt.models_list, 'r') as f:
         lst = [s.strip().split(' ') for s in f.readlines()]
-        all_models, all_targets = zip(*lst)
+        paths, all_targets, epochs = zip(*lst)
+        last_names = []
+        all_models = []
+        for i, path in enumerate(paths):
+            last_name = path.split("/")[-1]
+            if epochs[i] == "-1":
+                all_models.append('netG.pth')
+            else:
+                # last_name, epoch = path.split('-')[:2]
+                # last_name = last_name.split("/")[-1]
+                all_models.append(f'{epochs[i]}_net_G.pth')
+            last_names.append(last_name)
+             
+        print(epochs)
 
     torch.set_grad_enabled(False)
     mp.set_start_method('spawn')
 
     metrics = OrderedDict()
-    for name, target in zip(all_models, all_targets):
-        metrics[name] = get_metrics(opt, name, target)
-        print(f"({name}) {metrics[name]}")
+    for model_name, target, path, last_name in zip(all_models, all_targets, paths, last_names):
+        metric_name = last_name+"-"+model_name
+        metrics[metric_name] = get_metrics(opt, model_name, target, path, metric_name)
+        metric_value = metrics[metric_name]
+        print(f"({model_name}) {metric_value}")
 
-        table_columns = ['fid', 'ppl', 'precision', 'recall']
-        table = pd.DataFrame.from_dict(metrics, orient='index', columns=table_columns)
+        #table_columns = ['fid', 'ppl', 'precision', 'recall']
+        #table = pd.DataFrame.from_dict(metrics, orient='index', columns=table_columns)
+        table = pd.DataFrame.from_dict(metrics, orient='index')
         table.to_csv(opt.output, na_rep='--')

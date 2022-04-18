@@ -8,6 +8,47 @@ from torch.nn import functional as F
 from .op import FusedLeakyReLU, fused_leaky_relu, upfirdn2d
 import torch.autograd as autograd
 
+import numpy as np
+
+class GetSubnetRandom(autograd.Function):
+    @staticmethod
+    def forward(ctx, scores, k):
+        out = scores.clone()
+        idx = np.random.permutation(scores.numel())
+        j = int((1 - k) * scores.numel())
+
+        
+        flat_out = out.flatten()
+        flat_out[idx[:j]] = 0
+        flat_out[idx[j:]] = 1
+
+        return out
+
+    @staticmethod
+    def backward(ctx, g):
+        # send the gradient g straight-through on the backward pass.
+        return g, None
+
+class GetSubnetSmallest(autograd.Function):
+    @staticmethod
+    def forward(ctx, weights, k):
+        # Get the supermask by sorting the scores and using the top k%
+        # "scores" here must be the weights of the layer.
+        out = weights.clone()
+        _, idx = weights.flatten().sort()
+        j = int((1 - k) * weights.numel())
+
+        # flat_out and out access the same memory.
+        flat_out = out.flatten()
+        flat_out[idx[:j]] = 0
+        flat_out[idx[j:]] = 1
+
+        return out
+
+    @staticmethod
+    def backward(ctx, g):
+        # send the gradient g straight-through on the backward pass.
+        return g, None
 
 class GetSubnet(autograd.Function):
     @staticmethod
@@ -150,7 +191,9 @@ class EqualConv2d(nn.Module):
 class EqualLinear(nn.Module):
     def __init__(
         self, in_dim, out_dim, bias=True, bias_init=0, lr_mul=1, activation=None,
-        use_supermask=False, sparsity=None, finetune_supermask=False
+        use_supermask=False, sparsity=None, finetune_supermask=False,
+        use_smallest_supermask=False,
+        use_random_supermask=False
     ):
         super().__init__()
         #self.supermasklist = supermasklist
@@ -161,21 +204,40 @@ class EqualLinear(nn.Module):
         self.weight = nn.Parameter(torch.randn(out_dim, in_dim).div_(lr_mul))
         
         self.use_supermask = use_supermask
+        self.use_smallest_supermask = use_smallest_supermask
+        self.use_random_supermask = use_random_supermask
+        self.score_initialized = False
         self.sparsity = sparsity
 
-        if use_supermask:
+        if self.use_supermask:
             # REF: https://github.com/allenai/hidden-networks/blob/dddf2d093de568fc76d460a77fa2650e56e79c1a/simple_mnist_example.py#L65
             self.scores = nn.Parameter(torch.Tensor(self.weight.size()))
             nn.init.kaiming_uniform_(self.scores, a=math.sqrt(5))
 
             # NOTE: initialize the weights like this.
-            nn.init.kaiming_normal_(self.weight, mode="fan_in", nonlinearity="relu")
+            #nn.init.kaiming_normal_(self.weight, mode="fan_in", nonlinearity="relu")
 
-            # NOTE: turn the gradient on the weights off
-            if not finetune_supermask:
-                self.weight.requires_grad = False
-            else:
+            # NOTE: Here we can choose to update the masked weights
+            # or the supermask. Notice that only one is optimized at a time.
+            if finetune_supermask:
                 self.scores.requires_grad = False
+            # else:
+            #     self.weight.requires_grad = False
+        elif self.use_smallest_supermask:
+            # Here the smallest weights are prunned and only the remaining are optimized.
+            #self.scores = nn.Parameter(torch.Tensor(self.weight.size()))
+            #self.scores = GetSubnetSmallest.apply(self.scores, self.sparsity)
+            #self.scores.requires_grad = False
+            self.scores = None
+        elif self.use_random_supermask:
+            # Here a random mask is generated to prune the network. Only the remaining weights are optimized.
+            #self.scores = nn.Parameter(torch.Tensor(self.weight.size()))
+            #self.scores = GetSubnetRandom.apply(self.scores, self.sparsity)
+            #self.weight.requires_grad = False
+            #self.scores.requires_grad = False
+            self.scores = None
+
+
         
         
 
@@ -214,6 +276,14 @@ class EqualLinear(nn.Module):
         if self.use_supermask:
             subnet = GetSubnet.apply(self.scores.abs(), self.sparsity)
             masked_weight = self.weight * subnet
+        elif self.use_smallest_supermask:
+            if self.scores is None:
+                self.scores = GetSubnetSmallest.apply(self.weight.data.abs(), self.sparsity)
+            masked_weight = self.weight * self.scores
+        elif self.use_random_supermask:
+            if self.scores is None:
+                self.scores = GetSubnetRandom.apply(self.weight.data, self.sparsity)
+            masked_weight = self.weight * self.scores
         else:
             masked_weight = self.weight
         
@@ -446,6 +516,8 @@ class Generator(nn.Module):
         lr_mlp=0.01,
         w_shift=False,
         use_supermask=False,
+        use_smallest_supermask=False,
+        use_random_supermask=False,
         sparsity=None,
         finetune_supermask=False
     ):
@@ -472,7 +544,9 @@ class Generator(nn.Module):
                     #supermasklist=None
                     use_supermask=use_supermask,
                     sparsity=sparsity,
-                    finetune_supermask=finetune_supermask
+                    finetune_supermask=finetune_supermask,
+                    use_smallest_supermask=use_smallest_supermask,
+                    use_random_supermask=use_random_supermask
                 )
             )
             #self.supermasks.append(supermasklist)
@@ -573,13 +647,13 @@ class Generator(nn.Module):
         input_is_latent=False,
         noise=None,
         randomize_noise=True,
-        supermasks=None
+        # supermasks=None
     ):
         if not input_is_latent:
-            if supermasks is not None: # Each style is a EqualLinear layer
-                styles = [self.style(s, supermask=sm) for s, sm in zip(styles, supermasks)]
-            else:
-                styles = [self.style(s) for s in styles]
+            # if supermasks is not None: # Each style is a EqualLinear layer
+            #     styles = [self.style(s, supermask=sm) for s, sm in zip(styles, supermasks)]
+            # else:
+            styles = [self.style(s) for s in styles]
 
         if noise is None:
             if randomize_noise:
@@ -736,6 +810,8 @@ class Discriminator(nn.Module):
 
             in_channel = out_channel
 
+        self.hyper_out_ch = in_channel  # used for hyper network.
+
         self.convs = nn.Sequential(*convs)
 
         self.stddev_group = 4
@@ -746,6 +822,20 @@ class Discriminator(nn.Module):
             EqualLinear(channels[4] * 4 * 4, channels[4], activation="fused_lrelu"),
             EqualLinear(channels[4], 1),
         )
+
+    def forward_backbone(self, x, y=None):
+        self.inter_feats = []
+        h = x
+        for conv in self.convs:
+            h = conv(h)
+            self.inter_feats.append(h)
+        if y is not None:
+            assert isinstance(y, torch.Tensor)
+        h = self.convs(x)
+        # for block_idx in range(self._start_block_idx, self._end_block_idx):
+        #     h = getattr(self, f"block{block_idx}")(h)
+        #     self.inter_feats.append(h)
+        return h
 
     def forward(self, input):
         out = self.convs(input)

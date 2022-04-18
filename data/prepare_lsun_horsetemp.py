@@ -35,7 +35,7 @@ def create_lsun(save_dir, lmdb_dir, resolution=256, max_images=None):
                 if _idx == max_images:
                     break
                 subidx = (_idx//10000)*10 # Changes every 10k indices
-                subpath = f"{subidx}k_cat"
+                subpath = f"{subidx}k_horse"
                 os.makedirs(os.path.join(save_dir, subpath), exist_ok=True)
                 #img_savename = os.path.join(save_dir, subpath,  '{:06d}.png'.format(_idx))
                 img_savename = os.path.join(save_dir, subpath, '{:06d}.png'.format(_idx))

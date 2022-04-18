@@ -143,3 +143,10 @@ cache_eval/
 output/
 .vscode/
 *.pth
+*.png
+*.csv
+*.zip
+lmdb/
+evaluations/
+*.npz
+eval_list*

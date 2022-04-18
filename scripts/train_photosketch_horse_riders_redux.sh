@@ -5,9 +5,9 @@ python train.py \
 --dataroot_image /scratch/arturao/GANSketching_old/data/image/horse --l_image 0.7 \
 --disable_eval \
 --eval_dir /scratch/arturao/GANSketching_old/data/eval/horse_riders \
---g_pretrained /scratch/arturao/GANSketching22/checkpoint/horse_riders_original30-10000/7500_net_G.pth \
---d_pretrained /scratch/arturao/GANSketching22/checkpoint/horse_riders_original30-10000/7500_net_D_image.pth \
+--g_pretrained /scratch/arturao/GANSketching_old/pretrained/stylegan2-horse/netG.pth \
+--d_pretrained /scratch/arturao/GANSketching_old/pretrained/stylegan2-horse/netD.pth \
 --diffaug_policy translation \
 --no_wandb \
---max_iter 10000 \
---resume_iter 7500 \
+--max_iter 75001 \
+--resume_iter 10000 \
