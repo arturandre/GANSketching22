@@ -24,17 +24,21 @@ class GANModel(torch.nn.Module):
         # netD_image is only created if image regularization is applied
         if isinstance(self.netD, list):
             self.netD_sketch, self.netD_image = self.netD
+            #self.netD_image.to('cuda:0')
         else:
             self.netD_sketch = self.netD
+        #self.netD_sketch.to('cuda:0')
 
         # transform modules to convert generator output to sketches, etc.
         self.tf_real = networks.OutputTransform(opt, process=opt.transform_real, diffaug_policy=opt.diffaug_policy)
         self.tf_fake = networks.OutputTransform(opt, process=opt.transform_fake, diffaug_policy=opt.diffaug_policy)
+        #self.netG.to('cuda:0')
 
         if self.opt.use_hypernet:
             self.netG.eval()
             self.hyper_net, self.mapping_indices_list = self.initialize_hypernetwork()
             self.hyper_net.heads.train()
+            #self.hyper_net.to('cuda:1')
 
     # Entry point for all calls involving forward pass of deep networks.
     def forward(self, data, mode):
@@ -44,6 +48,8 @@ class GANModel(torch.nn.Module):
             g_loss, generated = self.compute_generator_loss()
             return g_loss, generated
         elif mode == 'hypernet':
+            #real_sketch  = real_sketch.to('cuda:1')
+            #real_image = real_image.to('cuda:1')
             h_loss, generated = self.compute_hypernet_loss(real_sketch, real_image)
             return h_loss, generated
         elif mode == 'discriminator':
@@ -164,6 +170,7 @@ class GANModel(torch.nn.Module):
 
     def initialize_hypernetwork(self):
         style_widths = get_param_by_name(self.netG, 'style')[1]
+        self.backed_style_widths = [None]*len(style_widths)
         # Indices from the mapping layers of the generator to be predicted
         mapping_indices_list = []
         for style in tqdm(style_widths, desc="loading styles' indices"):
@@ -258,51 +265,53 @@ class GANModel(torch.nn.Module):
 
     def replace_generator_mapping_weights(self, generated_weights):
         style_widths = get_param_by_name(self.netG, 'style')[1]
-        self.backed_style_widths = [None]*len(style_widths)
+
+        #self.backed_style_widths = [None]*len(style_widths)
         self.netG.eval()
-        #from torch.autograd import Variable as V
         with torch.no_grad():
             for i, layer_indices in enumerate(tqdm(self.mapping_indices_list)):
-                # x = style_widths[i].detach().cpu().numpy()
-                #self.backed_style_widths[i] = style_widths[i].cpu().clone().detach()
                 x = style_widths[i]
-                x.flatten()[layer_indices] = generated_weights[i][0].flatten()
+                x = x.flatten()
+                if self.backed_style_widths[i] is None:
+                    self.backed_style_widths[i] = x[layer_indices].detach().cpu()
+                x[layer_indices] = generated_weights[i][0].flatten()
                 #pred_for_support[SAMPLE(1-30)][LAYER(1-16)][Weight/Bias(0-1)][PARAMETERS_INDICES]
-                # x.flatten()[layer_indices] = generated_weights[i][0].detach().cpu().numpy().flatten()
-                # style_widths[i] = torch.nn.Parameter(torch.from_numpy(x))
-                print(i)
+                
         
     
-    def restore_generator_pretrained_weights(self):
-        if self.opt.g_pretrained != '':
-            weights = torch.load(self.opt.g_pretrained, map_location=lambda storage, loc: storage)
-            self.netG.load_state_dict(weights, strict=False)
+    # def restore_generator_pretrained_weights(self):
+    #     style_widths = get_param_by_name(self.netG, 'style')[1]
+
+    #     #self.backed_style_widths = [None]*len(style_widths)
+    #     self.netG.eval()
+    #     with torch.no_grad():
+    #         for i, layer_indices in enumerate(tqdm(self.mapping_indices_list)):
+    #             x = style_widths[i]
+    #             x = x.flatten()
+    #             x[layer_indices] = self.backed_style_widths[i].cuda()
+    #             #pred_for_support[SAMPLE(1-30)][LAYER(1-16)][Weight/Bias(0-1)][PARAMETERS_INDICES]
         
     def compute_hypernet_loss(self, real_sketch, real_image):
         H_losses = {}
+        # real_image -> support image -> x hat
         generated_weights = self.hyper_net(real_image)
 
-        try:
-            if self.fake_image_base_gen is None:
-                self.fake_image_base_gen = [self.generate_fake() for _ in range(1)]
-        except Exception:
-                self.fake_image_base_gen = [self.generate_fake() for _ in range(1)]
 
-        fake_sample_size = len(self.fake_image_base_gen)
-        fake_sample_index = np.random.randint(fake_sample_size)
-        print(f"fake_sample_size: {fake_sample_size}")
-        print(f"fake_sample_index: {fake_sample_index}")
-        fake_image_base_gen_sample = self.fake_image_base_gen[fake_sample_index]
+        if self.opt.use_feature_matching:
+            with torch.no_grad():
+                fake_image = self.generate_fake()
+                fake_image = fake_image.detach()
 
         self.replace_generator_mapping_weights(generated_weights)
-
         g_loss, generated = self.compute_generator_loss()#(generated_weights)
         H_losses.update(g_loss)
+
         if self.opt.use_feature_matching:
-            fm_loss = self.compute_feature_matching_loss(fake_image_base_gen_sample)#(generated_weights)
+            fm_loss = self.compute_feature_matching_loss(fake_image)#(generated_weights)
             H_losses['fm_loss'] = fm_loss
 
         #self.restore_generator_pretrained_weights()
+
         return H_losses, generated.detach()
 
     def compute_generator_loss(self, generated_weights=None):
