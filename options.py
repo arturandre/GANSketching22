@@ -68,6 +68,10 @@ def get_opt():
     parser.add_argument('--use_hypernet', action="store_true", help="use this flag to train a hypernetwork instead of fine-tuning the generator")
     parser.add_argument('--use_feature_matching', action="store_true", help="use this flag to enable the usage of the feature matching loss")
     parser.add_argument('--hypernet_params', type=int, default=512, help='Number of parameters of each style layer of the mapping network to be predicted by the hypernet (-1 for all)')
+    
+    # Here we select how many of the biggest (in abs value) values of the mapping layer of the pre-trained
+    # generator will be trained. The other parameters will be kept frozen.
+    parser.add_argument('--fine_tune_top_k', type=int, default=-1, help='Number of parameters of each style layer of the mapping network to be fine tuned (-1 for all)')
 
     parser.add_argument("--dataroot_sketch", type=str, required=True, help="root to the sketch dataset")
     parser.add_argument("--dataroot_sketch_augs", type=str, required=False, help="root to the augmented sketches dataset, if supplied will shadow the --dataroot_sketch option")

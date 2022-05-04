@@ -193,7 +193,8 @@ class EqualLinear(nn.Module):
         self, in_dim, out_dim, bias=True, bias_init=0, lr_mul=1, activation=None,
         use_supermask=False, sparsity=None, finetune_supermask=False,
         use_smallest_supermask=False,
-        use_random_supermask=False
+        use_random_supermask=False,
+        fine_tune_top_k=-1
     ):
         super().__init__()
         #self.supermasklist = supermasklist
@@ -203,6 +204,7 @@ class EqualLinear(nn.Module):
 
         self.weight = nn.Parameter(torch.randn(out_dim, in_dim).div_(lr_mul))
         
+        self.fine_tune_top_k = fine_tune_top_k
         self.use_supermask = use_supermask
         self.use_smallest_supermask = use_smallest_supermask
         self.use_random_supermask = use_random_supermask
@@ -236,6 +238,8 @@ class EqualLinear(nn.Module):
             #self.weight.requires_grad = False
             #self.scores.requires_grad = False
             self.scores = None
+        elif self.fine_tune_top_k > -1:
+            self.grad_mask = torch.zeros(self.weight.numel())
 
 
         
@@ -286,6 +290,15 @@ class EqualLinear(nn.Module):
             masked_weight = self.weight * self.scores
         else:
             masked_weight = self.weight
+        if self.fine_tune_top_k > -1:
+            if torch.sum(self.grad_mask) == 0:
+                #out = self.weight.clone()
+                _, idx = self.weight.flatten().sort()
+                self.grad_mask[idx[:self.fine_tune_top_k]] = 1.0
+                self.grad_mask = self.grad_mask.reshape(self.weight.shape).to(self.weight.device)
+                # Ref: https://discuss.pytorch.org/t/update-only-sub-elements-of-weights/29101/2
+                self.weight.register_hook(lambda grad: grad.mul_(self.grad_mask))
+
         
         if self.activation:
             out = F.linear(input, masked_weight * self.scale)
@@ -303,11 +316,15 @@ class EqualLinear(nn.Module):
     def __repr__(self):
         if self.use_supermask:
             return (
-                f"{self.__class__.__name__}({self.weight.shape[1]}, {self.weight.shape[0]})"
+                f"{self.__class__.__name__}({self.weight.shape[1]}, {self.weight.shape[0]}) supermasked"
+            )
+        elif self.use_smallest_supermask:
+            return (
+                f"{self.__class__.__name__}({self.weight.shape[1]}, {self.weight.shape[0]}) smallest_supermask"
             )
         else:
             return (
-                f"{self.__class__.__name__}({self.weight.shape[1]}, {self.weight.shape[0]}) supermasked"
+                f"{self.__class__.__name__}({self.weight.shape[1]}, {self.weight.shape[0]})"
             )
 
 class ModulatedConv2d(nn.Module):
@@ -519,7 +536,8 @@ class Generator(nn.Module):
         use_smallest_supermask=False,
         use_random_supermask=False,
         sparsity=None,
-        finetune_supermask=False
+        finetune_supermask=False,
+        fine_tune_top_k=-1
     ):
         super().__init__()
         # supermasks is a list of lists, each of the inner lists correspond
@@ -546,7 +564,8 @@ class Generator(nn.Module):
                     sparsity=sparsity,
                     finetune_supermask=finetune_supermask,
                     use_smallest_supermask=use_smallest_supermask,
-                    use_random_supermask=use_random_supermask
+                    use_random_supermask=use_random_supermask,
+                    fine_tune_top_k=fine_tune_top_k
                 )
             )
             #self.supermasks.append(supermasklist)

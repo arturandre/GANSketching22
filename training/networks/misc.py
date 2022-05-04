@@ -10,6 +10,7 @@ def define_G(opt):
         use_random_supermask=opt.use_random_supermask,
         sparsity=opt.sparsity,
         finetune_supermask=opt.finetune_supermask,
+        fine_tune_top_k=opt.fine_tune_top_k
         )
     return generator
 
